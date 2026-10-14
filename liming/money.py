@@ -4,10 +4,10 @@ from decimal import ROUND_HALF_UP, Decimal
 
 
 def fmt(cents):
-    """123456 -> 'US$1,234.56'"""
+    """123456 -> 'US$1,234.56'; whole dollars drop the cents: 12300 -> 'US$123' (as the front end does)."""
     sign = "-" if cents < 0 else ""
     cents = abs(cents)
-    return f"{sign}US${cents // 100:,}.{cents % 100:02d}"
+    return f"{sign}US${cents // 100:,}" + (f".{cents % 100:02d}" if cents % 100 else "")
 
 
 def percent_of(cents, percent):

@@ -50,6 +50,7 @@ FERRY_MINUTES, FERRY_CENTS = 60, 2500                          # per crossing; c
 NEAR_STYLES = {("guesthouse", "hotel"), ("hotel", "boutique"), ("boutique", "resort"), ("hotel", "villa"),
                ("hotel", "resort")}
 CHILD_MEAL_SHARE = 0.6
+AVOID_PENALTY = 40                         # "something different": last time's picks only if nothing else fits
 TAXI_DAY_GUESS = 15000                     # cents per taxi per day, for the first budget split
 
 
@@ -358,6 +359,7 @@ class _Planner:
         self.used_restaurants = {k.restaurant.id: 1 for k in kept if k.restaurant is not None}
         self.cuisines = {k.restaurant.cuisine for k in kept if k.restaurant is not None}
         self.had_special = any(k.restaurant is not None and k.restaurant.price_band == 4 for k in kept)
+        self.avoid_activities, self.avoid_restaurants = set(), set()
         self.tag_uses = {}
         # Things that match none of the traveller's interests only appear if they're a local favourite
         self.candidates = [a for a in cat.activities if suits_group(a, prefs)
@@ -396,6 +398,8 @@ class _Planner:
             score -= 8
         if p.children and a.min_age <= (p.youngest_age or 0) and a.energy < 3:
             score += 2 if {"beaches", "nature", "water"} & a.tag_names else 0
+        if a.id in self.avoid_activities:
+            score -= AVOID_PENALTY
         return score + jitter(a.id, p.variety)
 
     def _activity_reason(self, a, d, came_from):
@@ -486,6 +490,7 @@ class _Planner:
             home = travel(r.area, self.stay.area, p.transport) if which == "dinner" else 0
             score = -(here + home) / 2              # lunch near where you are; dinner on the way home
             score += 6 if r.id not in self.used_restaurants else -8 * self.used_restaurants[r.id]
+            score -= AVOID_PENALTY if r.id in self.avoid_restaurants else 0
             score += 3 if r.cuisine not in self.cuisines else 0
             score -= abs(r.price_band - IDEAL_BAND[p.dining_style]) * 2
             if p.dining_style == "treat" and which == "dinner" and r.price_band == 4 and not self.had_special:
@@ -651,11 +656,10 @@ def plan_trip(prefs, cat, stay=None, kept=(), days=None, avoid=()):
         stay_reason = next((why for s, why in options if s.id == stay.id), "")
     all_days = {prefs.start + timedelta(days=n) for n in range(prefs.nights + 1)}
     planner = _Planner(prefs, cat, stay, list(kept))
-    for kind, thing_id in avoid:
-        if kind == "activity":
-            planner.used_activities.add(thing_id)
-        else:
-            planner.used_restaurants[thing_id] = planner.used_restaurants.get(thing_id, 0) + 1
+    # "Something different" is a strong preference, not a ban: last time's picks only come back
+    # if nothing else fits, so a day is never left empty just to be different
+    planner.avoid_activities = {thing_id for kind, thing_id in avoid if kind == "activity"}
+    planner.avoid_restaurants = {thing_id for kind, thing_id in avoid if kind == "restaurant"}
     items = planner.run(set(days) if days is not None else all_days)
     return Plan(stay=stay, stay_reason=stay_reason, items=items, notes=planner.notes)
 

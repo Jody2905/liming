@@ -11,11 +11,13 @@ Editing rules
     time to get somewhere). They are allowed, and `plan_for` lists them as warnings.
 """
 
+import hashlib
+import secrets
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 
 from . import passwords, planner
 from .models import (
@@ -28,7 +30,9 @@ from .models import (
     TRANSPORT,
     Activity,
     Area,
+    Booking,
     Destination,
+    LoginSession,
     PlanItem,
     Restaurant,
     Stay,
@@ -92,9 +96,63 @@ def authenticate(db, email, password):
 
 
 # ======================================================================
+# Login sessions
+# ======================================================================
+# The browser keeps a random token in a cookie; the database stores only its SHA-256, so a
+# leaked database can't be used to log in. Each session has its own CSRF token, which the
+# page sends back as a header on every change (another website can't read it).
+
+SESSION_DAYS = 7
+
+
+def start_session(db, user, now=None):
+    """Returns (cookie token, session). The token is shown once and never stored."""
+    now = now or datetime.now()
+    token = secrets.token_urlsafe(32)
+    with _tx(db):
+        session = LoginSession(token_hash=_hash_token(token), user_id=user.id, csrf_token=secrets.token_urlsafe(32),
+                               created_at=now, expires_at=now + timedelta(days=SESSION_DAYS))
+        db.add(session)
+    return token, session
+
+
+def session_for(db, token, now=None):
+    """(user, session) for a cookie token, or None if it's unknown or has run out."""
+    if not token:
+        return None
+    now = now or datetime.now()
+    row = db.execute(select(LoginSession, User).join(User, User.id == LoginSession.user_id)
+                     .where(LoginSession.token_hash == _hash_token(token))).first()
+    if row is None or row[0].expires_at <= now:
+        db.rollback()
+        return None
+    session, user = row
+    db.expunge(session)
+    db.expunge(user)                                # keep their loaded values after the read ends
+    db.rollback()
+    return user, session
+
+
+def end_session(db, token):
+    if token:
+        with _tx(db):
+            db.execute(delete(LoginSession).where(LoginSession.token_hash == _hash_token(token)))
+
+
+def end_expired_sessions(db, now=None):
+    with _tx(db):
+        return db.execute(delete(LoginSession).where(LoginSession.expires_at <= (now or datetime.now()))).rowcount
+
+
+def _hash_token(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+# ======================================================================
 # The answers
 # ======================================================================
 
+BOOKED_ANSWERS = {"destination_id", "start_date", "end_date", "adults", "children"}
 ANSWER_FIELDS = ("title", "destination_id", "start_date", "end_date", "adults", "children", "youngest_age",
                  "budget_cents", "pace", "stay_style", "dining_style", "transport", "day_start", "step_free",
                  "interests", "diets")
@@ -123,6 +181,9 @@ def update_answers(db, user, trip_id, now=None, **changes):
     if unknown:
         raise LimingError(f"Unknown answer: {', '.join(sorted(unknown))}")
     trip = _own_trip(db, user, trip_id)
+    if changes.keys() & BOOKED_ANSWERS and _live(db, trip.id, now):
+        raise LimingError("You have bookings for these dates and people. Cancel them before changing "
+                          "the country, dates or group size.")
     current = {k: getattr(trip, k) for k in ANSWER_FIELDS if k not in ("interests", "diets")}
     current["interests"] = {i.tag: i.weight for i in trip.interests}
     current["diets"] = {d.diet for d in trip.diets}
@@ -209,9 +270,14 @@ def trips_for(db, user):
     return db.scalars(select(Trip).where(Trip.owner_id == user.id).order_by(Trip.start_date, Trip.id)).all()
 
 
-def delete_trip(db, user, trip_id):
+def delete_trip(db, user, trip_id, now=None):
+    now = now or datetime.now()
     with _tx(db):
         trip = _own_trip(db, user, trip_id, lock=True)
+        if _live(db, trip.id, now):
+            raise LimingError("Cancel this trip's bookings before deleting it")
+        db.execute(delete(Booking).where(Booking.trip_id == trip.id), execution_options={
+            "synchronize_session": "fetch"})                 # old cancelled or lapsed ones
         db.delete(trip)
 
 
@@ -236,10 +302,14 @@ def generate(db, user, trip_id, now=None, fresh=False):
             trip.variety += 1
         items = _items(db, trip.id)
         kept = [_to_planned(i) for i in items if _keep(i)]
+        avoid = []
+        if fresh:                                   # "something different": leave out what's there now, if possible
+            avoid = [("activity", i.activity_id) for i in items if i.activity_id and not _keep(i)] + [
+                ("restaurant", i.restaurant_id) for i in items if i.restaurant_id and not _keep(i)]
         cat = load_catalogue(db, trip.destination_id)
         try:
             plan = planner.plan_trip(Prefs.from_trip(trip), cat, stay=trip.stay if trip.stay_locked else None,
-                                     kept=kept)
+                                     kept=kept, avoid=avoid)
         except planner.PlanError as e:
             raise LimingError(str(e)) from None
         _replace_unkept(db, trip, items, plan.items, days=None)
@@ -336,13 +406,15 @@ def alternatives(db, user, item_id, limit=5):
                                 list(planned.values()), planned[item.id], limit=limit)
 
 
-def swap(db, user, item_id, activity_id=None, restaurant_id=None):
+def swap(db, user, item_id, activity_id=None, restaurant_id=None, now=None):
     """Swap an item for one of its alternatives (or any activity/restaurant in the same country)."""
+    now = now or datetime.now()
     if (activity_id is None) == (restaurant_id is None):
         raise LimingError("Choose one activity or one restaurant to swap in")
     options = alternatives(db, user, item_id, limit=100)
     with _tx(db):
         item, trip = _own_item(db, user, item_id, lock_trip=True)
+        _not_booked(db, item, now)
         if (activity_id is not None) != (item.kind == "activity"):
             raise LimingError("Swap an activity for an activity, and a meal for a meal")
         choice = next((o for o in options if (o.activity and o.activity.id == activity_id)
@@ -371,13 +443,14 @@ def swap(db, user, item_id, activity_id=None, restaurant_id=None):
     return _refreshed(db, item)
 
 
-def move_item(db, user, item_id, day, starts):
+def move_item(db, user, item_id, day, starts, now=None):
     """Move an item to another day and/or time, keeping its length. Moved items are locked."""
-    starts = _clock(starts)
+    starts, now = _clock(starts), now or datetime.now()
     with _tx(db):
         item, trip = _own_item(db, user, item_id, lock_trip=True)
         if item.kind == "stay":
             raise LimingError("Check-in and check-out follow your stay. Change the stay instead.")
+        _not_booked(db, item, now)
         _check_day(trip, day)
         length = minutes(item.ends) - minutes(item.starts)
         if minutes(starts) + length > planner.DAY_ENDS:
@@ -387,23 +460,27 @@ def move_item(db, user, item_id, day, starts):
     return _refreshed(db, item)
 
 
-def retime_item(db, user, item_id, starts, ends):
-    starts, ends = _clock(starts), _clock(ends)
+def retime_item(db, user, item_id, starts, ends, now=None):
+    starts, ends, now = _clock(starts), _clock(ends), now or datetime.now()
     if ends <= starts:
         raise LimingError("It has to end after it starts")
     with _tx(db):
         item, trip = _own_item(db, user, item_id, lock_trip=True)
         if item.kind == "stay":
             raise LimingError("Check-in and check-out follow your stay. Change the stay instead.")
+        _not_booked(db, item, now)
         item.starts, item.ends, item.locked = starts, ends, True
     return _refreshed(db, item)
 
 
-def set_locked(db, user, item_id, locked):
+def set_locked(db, user, item_id, locked, now=None):
+    now = now or datetime.now()
     with _tx(db):
         item, _ = _own_item(db, user, item_id, lock_trip=True)
         if item.kind == "stay":
             raise LimingError("Check-in and check-out always stay in the plan")
+        if not locked:
+            _not_booked(db, item, now)
         item.locked = bool(locked)
     return _refreshed(db, item)
 
@@ -415,11 +492,13 @@ def set_notes(db, user, item_id, notes):
     return _refreshed(db, item)
 
 
-def remove_item(db, user, item_id):
+def remove_item(db, user, item_id, now=None):
+    now = now or datetime.now()
     with _tx(db):
         item, trip = _own_item(db, user, item_id, lock_trip=True)
         if item.kind == "stay":
             raise LimingError("Check-in and check-out follow your stay. Change the stay instead.")
+        _not_booked(db, item, now)
         db.delete(item)
     return trip.id
 
@@ -474,11 +553,14 @@ def stay_choices(db, user, trip_id):
             for s, why in planner.stay_options(prefs, load_catalogue(db, trip.destination_id))]
 
 
-def choose_stay(db, user, trip_id, stay_id):
+def choose_stay(db, user, trip_id, stay_id, now=None):
     """Pick a different stay. Check-in and check-out move with it; the rest of the plan stays as it is
     (regenerate to replan around the new base)."""
+    now = now or datetime.now()
     with _tx(db):
         trip = _own_trip(db, user, trip_id, lock=True)
+        if db.scalar(select(Booking).where(Booking.trip_id == trip.id, Booking.kind == "stay", holding(now))):
+            raise LimingError("Your stay is booked. Cancel that booking before choosing another.")
         prefs = Prefs.from_trip(trip)
         options = {s.id: s for s, _ in planner.stay_options(prefs, load_catalogue(db, trip.destination_id))}
         if stay_id not in options:
@@ -496,6 +578,21 @@ def choose_stay(db, user, trip_id, stay_id):
 # ======================================================================
 # Helpers
 # ======================================================================
+
+def holding(now):
+    """Bookings that still take up space: confirmed ones, and holds that haven't run out."""
+    return or_(Booking.status == "confirmed", (Booking.status == "held") & (Booking.held_until > now))
+
+
+def _live(db, trip_id, now):
+    return db.scalar(select(func.count()).select_from(Booking).where(Booking.trip_id == trip_id, holding(now)))
+
+
+def _not_booked(db, item, now):
+    b = db.scalar(select(Booking).where(Booking.plan_item_id == item.id, holding(now)))
+    if b is not None:
+        raise LimingError(f"{item.title} is booked ({b.reference}). Cancel the booking first.")
+
 
 def _items(db, trip_id):
     return db.scalars(select(PlanItem).where(PlanItem.trip_id == trip_id)

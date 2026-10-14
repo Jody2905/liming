@@ -196,3 +196,23 @@ def test_two_regenerations_at_once_do_not_double_the_plan(Session, db, jo, trip)
     assert [i.title for items in view.days.values() for i in items if i.kind == "stay"] == [
         f"Check in at {view.trip.stay.name}", f"Check out of {view.trip.stay.name}"]
     assert view.issues == []
+
+
+def test_something_different_never_empties_the_plan(db, jo, dest):
+    """A narrow brief (child, vegetarian, Barbados) has few options: asking for something different
+    should prefer new picks but fall back to old ones rather than leave days empty."""
+    family = services.create_trip(db, jo, now=NOW, **answers(
+        dest, destination_id=dest["BB"], children=1, youngest_age=6, diets={"vegetarian"},
+        interests={"food": 2, "beaches": 1, "culture": 1}, budget_cents=450000))
+
+    def activities():
+        days = services.plan_for(db, jo, family.id).days.values()
+        return [i.title for items in days for i in items if i.kind == "activity"]
+
+    before = activities()
+    for _ in range(3):
+        services.generate(db, jo, family.id, now=NOW, fresh=True)
+        after = activities()
+        assert len(after) >= len(before) - 1, (before, after)          # as full as before, give or take
+        assert after != before                                        # and actually different
+        before = after

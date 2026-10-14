@@ -310,3 +310,70 @@ class PlanItem(Base):
     activity: Mapped[Activity | None] = relationship(lazy="joined")
     restaurant: Mapped[Restaurant | None] = relationship(lazy="joined")
     area: Mapped[Area | None] = relationship(lazy="joined")
+
+
+# ======================================================================
+# Bookings and logins
+# ======================================================================
+
+BOOKING_KINDS = ("stay", "activity", "table")
+BOOKING_STATUSES = ("held", "confirmed", "cancelled", "expired")
+
+
+class Booking(Base):
+    """One booking: the stay for the whole trip, places on an activity at a set time, or a table.
+
+    It starts as a 15-minute HOLD (space set aside while the traveller decides), then is
+    CONFIRMED, or lapses (EXPIRED), or is CANCELLED. Exactly one of stay_id / activity_id /
+    restaurant_id is set, matching `kind`; the database checks that.
+    """
+    __tablename__ = "bookings"
+    __table_args__ = (
+        CheckConstraint(_in("kind", BOOKING_KINDS), name="booking_kind_known"),
+        CheckConstraint(_in("status", BOOKING_STATUSES), name="booking_status_known"),
+        CheckConstraint("quantity > 0 AND units > 0", name="booking_quantity_positive"),
+        CheckConstraint("total_cents >= 0 AND refund_cents >= 0 AND refund_cents <= total_cents",
+                        name="booking_money_adds_up"),
+        CheckConstraint("end_date >= start_date", name="booking_ends_after_start"),
+        CheckConstraint("(kind = 'stay') = (stay_id IS NOT NULL) AND (kind = 'activity') = (activity_id IS NOT NULL)"
+                        " AND (kind = 'table') = (restaurant_id IS NOT NULL)", name="booking_points_at_one_thing"),
+        CheckConstraint("kind <> 'table' OR total_cents = 0", name="tables_are_free_to_book"),
+        Index("ix_bookings_stay_dates", "stay_id", "status", "start_date", "end_date"),
+        Index("ix_bookings_activity_slot", "activity_id", "status", "starts_at"),
+        Index("ix_bookings_table_day", "restaurant_id", "status", "start_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reference: Mapped[str] = mapped_column(String(12), unique=True)
+    trip_id: Mapped[int] = mapped_column(ForeignKey("trips.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    plan_item_id: Mapped[int | None] = mapped_column(ForeignKey("plan_items.id", ondelete="SET NULL"))
+    kind: Mapped[str] = mapped_column(String(8))
+    status: Mapped[str] = mapped_column(String(10))
+    stay_id: Mapped[int | None] = mapped_column(ForeignKey("stays.id"))
+    activity_id: Mapped[int | None] = mapped_column(ForeignKey("activities.id"))
+    restaurant_id: Mapped[int | None] = mapped_column(ForeignKey("restaurants.id"))
+    title: Mapped[str] = mapped_column(String(160))                  # frozen at booking time
+    start_date: Mapped[date]                                         # check-in / the day
+    end_date: Mapped[date]                                           # check-out / the same day
+    starts_at: Mapped[datetime]                                      # exact start, for cancellation rules
+    quantity: Mapped[int]                                            # rooms, or people
+    units: Mapped[int] = mapped_column(default=1)                    # nights for a stay, else 1
+    total_cents: Mapped[int]
+    refund_cents: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime]
+    held_until: Mapped[datetime]
+    confirmed_at: Mapped[datetime | None]
+    cancelled_at: Mapped[datetime | None]
+
+
+class LoginSession(Base):
+    """A signed-in browser. Only a SHA-256 of the cookie token is kept."""
+    __tablename__ = "login_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    csrf_token: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime]
+    expires_at: Mapped[datetime]

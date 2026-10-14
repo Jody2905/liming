@@ -1,0 +1,29 @@
+{
+  "name": "liming-frontend",
+  "private": true,
+  "version": "0.3.0",
+  "type": "module",
+  "description": "Liming's front end: React + TypeScript, built into ../liming/web",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "api-types": "openapi-typescript openapi.json -o src/api-types.ts"
+  },
+  "dependencies": {
+    "@fontsource-variable/big-shoulders-display": "5.2.5",
+    "@fontsource-variable/figtree": "5.2.10",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "5.2.0",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "3.2.7"
+  }
+}

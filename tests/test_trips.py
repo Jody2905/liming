@@ -42,7 +42,7 @@ def test_answering_the_questions_builds_a_plan(db, jo, trip):
     ({"end_date": d(30)}, "up to 14 nights"),
     ({"adults": 0}, "Adults must be between 1 and 8"),
     ({"children": 2, "youngest_age": None}, "youngest child's age"),
-    ({"budget_cents": 40000}, r"at least US\$500\.00"),                   # 2 people x 5 nights x US$50
+    ({"budget_cents": 40000}, r"at least US\$500$"),                      # 2 people x 5 nights x US$50
     ({"pace": "frantic"}, "choose a pace"),
     ({"interests": {}}, "at least one thing"),
     ({"interests": {"beaches": 3}}, "1 \\(like\\) or 2 \\(love\\)"),
