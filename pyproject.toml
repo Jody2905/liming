@@ -1,6 +1,6 @@
 [project]
 name = "liming"
-version = "0.1.0"
+version = "1.0.0"
 description = "A Caribbean trip planner: answer a few questions, get a day-by-day itinerary you can edit."
 requires-python = ">=3.11"
 

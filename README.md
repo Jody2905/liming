@@ -1,5 +1,7 @@
 # Liming
 
+[![CI](https://github.com/Jody2905/liming/actions/workflows/ci.yml/badge.svg)](https://github.com/Jody2905/liming/actions/workflows/ci.yml)
+
 *Liming (Caribbean English): relaxing, hanging out, taking it easy.*
 
 A Caribbean trip planner. You answer a few questions (where, when, who's coming, budget,
@@ -16,10 +18,9 @@ regenerate the rest. When you're happy, book the stay, places on tours and resta
 |---|---|---|
 | ![Interest tiles: one pip for like, two for love](docs/screenshot-quiz.jpg) | ![A day of the plan with travel times, reasons and the budget](docs/screenshot-plan.jpg) | ![The plan on a phone](docs/screenshot-phone.jpg) |
 
-**Status:** Phase 3 of 4: planner, editing, booking, the web API and the React front end.
-(PostgreSQL + CI come next.)
-
 ## Run it
+
+Needs Python 3.11 or newer. On Windows use `py`; on macOS/Linux use `python3`.
 
 ```
 py -m pip install -r requirements-dev.txt
@@ -40,6 +41,22 @@ npm test                     # unit tests (Vitest)
 npm run build                # type-check, then build into ../liming/web
 ```
 
+Demo logins: `jo@example.test` and `kemar@example.test`, password `Liming-2026-demo`.
+The home page also has a one-click "Look around as Jo".
+
+### On PostgreSQL
+
+SQLite is the default. For PostgreSQL, create an empty database and point Liming at it:
+
+```
+$env:LIMING_DATABASE_URL = "postgresql+psycopg://user:password@localhost/liming"    # PowerShell
+py -m liming init-demo
+py -m liming serve
+```
+
+To run the tests on PostgreSQL, set `LIMING_TEST_DATABASE_URL` the same way. The tests empty
+that database first, so give them one of their own.
+
 ## The front end
 
 React 19 + TypeScript, built with Vite, no other runtime libraries.
@@ -59,8 +76,6 @@ React 19 + TypeScript, built with Vite, no other runtime libraries.
 - **Safe and self-contained.** React escapes all text (a test checks nothing turns that off),
   the fonts are bundled, and a strict Content Security Policy allows only the app's own files.
 - Works from 360px phones up, with visible keyboard focus and labelled controls.
-
-Demo logins: `jo@example.test` and `kemar@example.test`, password `Liming-2026-demo`.
 
 ## How the planner decides
 
@@ -165,7 +180,41 @@ Security is the same design as my Jaunt project:
 - A catalogue check: every tour's set start times fit its opening hours.
 - Runs on SQLite and PostgreSQL.
 
+### CI
+
+Every push runs seven jobs on GitHub Actions:
+
+- **lint:** ruff
+- **tests on Python 3.11, 3.12 and 3.13:** SQLite, plus the printed demo
+- **PostgreSQL 16:** the full suite, then building the demo database through the migrations
+- **front end:** TypeScript check, Vitest, and two drift checks:
+  - the TypeScript API types match the API description
+  - the committed build matches the source, since the build is byte-for-byte repeatable
+- **browser:** Playwright drives Chromium through signing up, the questions, editing and
+  booking. On a laptop without Playwright this test is skipped; in CI it must run.
+
+## How it's organised
+
+```
+liming/
+  models.py      the tables (SQLAlchemy 2), with CHECK constraints for every rule they can hold
+  catalogue.py   the five countries: invented businesses at real places
+  planner.py     the rule-based planner: pure Python, no database, quick to test
+  services.py    answers, generating, editing, login sessions
+  bookings.py    holds, confirming, cancelling, and counting what's left
+  api.py         FastAPI: HTTP in, service calls, JSON out; security headers, CSRF, throttling
+  schemas.py     request and response shapes (Pydantic 2, strict)
+  web/           the built front end (from frontend/)
+frontend/        React + TypeScript source, Vitest tests, the API description it's typed from
+migrations/      Alembic migrations, the real way the database is built
+tests/           pytest: planner rules, editing, booking races, API, migrations, front end, browser
+```
+
+The planner works on plain objects and never touches the database. The services load what it
+needs and save what it returns. That split is why 150 random plans can be checked in about a
+second.
+
 ## Built with
 
-Python 3.11+, FastAPI, Pydantic 2, SQLAlchemy 2, Alembic, pytest, Playwright; React 19, TypeScript,
-Vite, Vitest. Fonts: Big Shoulders Display and Figtree (SIL Open Font Licence).
+Python 3.11+, FastAPI, Pydantic 2, SQLAlchemy 2, Alembic, PostgreSQL / SQLite, pytest, Playwright,
+ruff, GitHub Actions; React 19, TypeScript, Vite, Vitest. Fonts: Big Shoulders Display and Figtree (SIL Open Font Licence).

@@ -3,7 +3,7 @@
   "info": {
     "title": "Liming",
     "description": "\nAnswer a few questions and get a timed, day-by-day Caribbean itinerary that explains every\nchoice. Then edit it, and book the stay, activities and restaurant tables.\n**Every business and price is invented demo data. No payments are taken.**\n\n### Trying it here\n1. **POST /api/auth/login** with `jo@example.test` / `Liming-2026-demo` (*Try it out*, then *Execute*).\n2. Copy `csrf_token` from the response, click **Authorize** and paste it into **X-CSRF-Token** only.\n3. **GET /api/trips**, then **GET /api/trips/{trip_id}** for the whole plan with its reasons.\n4. Try **POST /api/trips/{trip_id}/generate** with `{\"fresh\": true}` for something different,\n   or **GET /api/items/{item_id}/alternatives** to see what else would fit.\n",
-    "version": "0.3.0"
+    "version": "1.0.0"
   },
   "paths": {
     "/api/auth/register": {

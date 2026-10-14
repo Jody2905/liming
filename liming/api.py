@@ -520,7 +520,7 @@ def cancel(booking_id: int, auth: Auth = Depends(signed_in), db=Depends(get_db),
 
 def create_app(url=None, engine=None, clock=None, secure_cookies=False):
     """`clock` lets tests choose what time it is. Pass secure_cookies=True when served over HTTPS."""
-    app = FastAPI(title="Liming", version="0.3.0", description=DESCRIPTION, openapi_tags=TAGS)
+    app = FastAPI(title="Liming", version="1.0.0", description=DESCRIPTION, openapi_tags=TAGS)
     app.state.Session = session_factory(engine or make_engine(url or database_url()))
     app.state.clock = clock or datetime.now
     app.state.secure_cookies = secure_cookies

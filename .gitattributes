@@ -1,0 +1,4 @@
+# Normal line-ending handling for source files...
+* text=auto
+# ...but the built front end is committed exactly as Vite wrote it, so CI can check it's up to date
+liming/web/** -text
