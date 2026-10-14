@@ -1,0 +1,18 @@
+[project]
+name = "liming"
+version = "0.1.0"
+description = "A Caribbean trip planner: answer a few questions, get a day-by-day itinerary you can edit."
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S"]
+ignore = ["S101", "S311", "B008", "UP017"]
+
+[tool.ruff.lint.per-file-ignores]
+"liming/catalogue.py" = ["E501"]       # one catalogue row per line reads better than wrapped rows
+"tests/*" = ["S105", "S106"]
